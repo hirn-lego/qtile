@@ -1,6 +1,7 @@
 Qtile x.x.x, released xxxx-xx-xx:
     * features
         - Add `lazy.window.center()` command to center a floating window on the screen.
+        - Add MonadThreeCol layout based on XMonad's ThreeColumns.
     * bugfixes
         - Fix `Systray` crash on `reconfigure_screens`.
 
