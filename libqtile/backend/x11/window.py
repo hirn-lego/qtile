@@ -17,11 +17,11 @@ from libqtile.backend import base
 from libqtile.backend.base import FloatStates
 from libqtile.backend.x11 import xcbq
 from libqtile.backend.x11.drawer import Drawer
-from libqtile.command.base import CommandError, ItemT
+from libqtile.command.base import CommandError
 from libqtile.log_utils import logger
 
 if TYPE_CHECKING:
-    from typing import List, Optional
+    from libqtile.command.base import ItemT
 
 # ICCM Constants
 NoValue = 0x0000
@@ -377,7 +377,7 @@ class XWindow:
                 self.conn.atoms[prop] if isinstance(prop, str) else prop,
                 self.conn.atoms[type] if isinstance(type, str) else type,
                 0,
-                (2 ** 32) - 1,
+                (2**32) - 1,
             ).reply()
         except (xcffib.xproto.WindowError, xcffib.xproto.AccessError):
             logger.debug("X error in GetProperty (wid=%r, prop=%r), ignoring", self.wid, prop)
@@ -502,8 +502,8 @@ class _Window:
             self._height = None
             self._depth = None
 
-        self.float_x: Optional[int] = None
-        self.float_y: Optional[int] = None
+        self.float_x: int | None = None
+        self.float_y: int | None = None
         self._float_width: int = self._width
         self._float_height: int = self._height
 
@@ -594,7 +594,7 @@ class _Window:
     def update_wm_class(self) -> None:
         self._wm_class = self.window.get_wm_class()
 
-    def get_wm_class(self) -> Optional[List[str]]:
+    def get_wm_class(self) -> list[str] | None:
         return self._wm_class
 
     def get_wm_type(self):
@@ -619,6 +619,9 @@ class _Window:
         except (xcffib.xproto.WindowError, xcffib.xproto.AccessError):
             return
 
+        width_inc = self.hints["width_inc"]
+        height_inc = self.hints["height_inc"]
+
         if normh:
             self.hints.update(normh)
 
@@ -633,9 +636,12 @@ class _Window:
         if h and "InputHint" in h["flags"]:
             self.hints["input"] = h["input"]
 
-        if getattr(self, "group", None):
-            if self.group.floating_layout.match(self):
-                self.floating = True
+        if (
+            self.group
+            and self.floating
+            and width_inc != self.hints["width_inc"]
+            and height_inc != self.hints["height_inc"]
+        ):
             self.group.layout_all()
 
         return
@@ -1159,7 +1165,7 @@ class Static(_Window, base.Static):
 
     def __init__(self, win, qtile, screen, x=None, y=None, width=None, height=None):
         _Window.__init__(self, win, qtile)
-        self._wm_class: Optional[List[str]] = None
+        self._wm_class: list[str] | None = None
         self.update_wm_class()
         self.update_name()
         self.conf_x = x
@@ -1253,7 +1259,7 @@ class Window(_Window, base.Window):
 
     def __init__(self, window, qtile):
         _Window.__init__(self, window, qtile)
-        self._wm_class: Optional[List[str]] = None
+        self._wm_class: list[str] | None = None
         self.update_wm_class()
         self.update_name()
         self.set_group()
@@ -1397,11 +1403,11 @@ class Window(_Window, base.Window):
 
     def cmd_static(
         self,
-        screen: Optional[int] = None,
-        x: Optional[int] = None,
-        y: Optional[int] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
+        screen: int | None = None,
+        x: int | None = None,
+        y: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
     ) -> None:
         """Makes this window a static window, attached to a Screen
 

@@ -49,11 +49,18 @@ from wlroots.wlr_types import (
     xdg_decoration_v1,
 )
 from wlroots.wlr_types.cursor import WarpMode
+from wlroots.wlr_types.idle import Idle
+from wlroots.wlr_types.idle_inhibit_v1 import IdleInhibitorManagerV1, IdleInhibitorV1
 from wlroots.wlr_types.layer_shell_v1 import LayerShellV1, LayerShellV1Layer, LayerSurfaceV1
 from wlroots.wlr_types.output_management_v1 import (
     OutputConfigurationHeadV1,
     OutputConfigurationV1,
     OutputManagerV1,
+)
+from wlroots.wlr_types.output_power_management_v1 import (
+    OutputPowerManagementV1Mode,
+    OutputPowerManagerV1,
+    OutputPowerV1SetModeEvent,
 )
 from wlroots.wlr_types.pointer_constraints_v1 import PointerConstraintsV1, PointerConstraintV1
 from wlroots.wlr_types.server_decoration import (
@@ -71,7 +78,7 @@ from libqtile.backend.wayland.output import Output
 from libqtile.log_utils import logger
 
 if typing.TYPE_CHECKING:
-    from typing import Dict, List, Optional, Sequence, Set, Tuple, Union
+    from typing import Sequence
 
     from wlroots.wlr_types import Output as wlrOutput
     from wlroots.wlr_types.data_device_manager import Drag
@@ -85,11 +92,11 @@ class Core(base.Core, wlrq.HasListeners):
 
     def __init__(self):
         """Setup the Wayland core backend"""
-        self.qtile: Optional[Qtile] = None
+        self.qtile: Qtile | None = None
         self.desktops: int = 1
         self.current_desktop: int = 0
-        self._hovered_internal: Optional[window.Internal] = None
-        self.focused_internal: Optional[window.Internal] = None
+        self._hovered_internal: window.Internal | None = None
+        self.focused_internal: window.Internal | None = None
 
         self.fd = None
         self.display = Display()
@@ -105,20 +112,20 @@ class Core(base.Core, wlrq.HasListeners):
         logger.info("Starting core with WAYLAND_DISPLAY=" + self.socket.decode())
 
         # These windows have not been mapped yet; they'll get managed when mapped
-        self.pending_windows: List[window.WindowType] = []
+        self.pending_windows: set[window.WindowType] = set()
 
         # mapped_windows contains just regular windows
-        self.mapped_windows: List[window.WindowType] = []  # Ascending in Z
+        self.mapped_windows: list[window.WindowType] = []  # Ascending in Z
         # stacked_windows also contains layer_shell windows from the current output
         self.stacked_windows: Sequence[window.WindowType] = []  # Ascending in Z
-        self._current_output: Optional[Output] = None
+        self._current_output: Output | None = None
 
         # set up inputs
-        self.keyboards: List[keyboard.Keyboard] = []
-        self.grabbed_keys: List[Tuple[int, int]] = []
-        self.grabbed_buttons: List[Tuple[int, int]] = []
+        self.keyboards: list[keyboard.Keyboard] = []
+        self.grabbed_keys: list[tuple[int, int]] = []
+        self.grabbed_buttons: list[tuple[int, int]] = []
         DataDeviceManager(self.display)
-        self.live_dnd: Optional[wlrq.Dnd] = None
+        self.live_dnd: wlrq.Dnd | None = None
         DataControlManagerV1(self.display)
         self.seat = seat.Seat(self.display, "seat0")
         self.add_listener(self.seat.request_set_selection_event, self._on_request_set_selection)
@@ -127,7 +134,7 @@ class Core(base.Core, wlrq.HasListeners):
         self.add_listener(self.backend.new_input_event, self._on_new_input)
 
         # set up outputs
-        self.outputs: List[Output] = []
+        self.outputs: list[Output] = []
         self.add_listener(self.backend.new_output_event, self._on_new_output)
         self.output_layout = OutputLayout()
         self.add_listener(self.output_layout.change_event, self._on_output_layout_change)
@@ -155,6 +162,13 @@ class Core(base.Core, wlrq.HasListeners):
         XdgOutputManagerV1(self.display, self.output_layout)
         ScreencopyManagerV1(self.display)
         GammaControlManagerV1(self.display)
+        output_power_manager = OutputPowerManagerV1(self.display)
+        self.add_listener(
+            output_power_manager.set_mode_event, self._on_output_power_manager_set_mode
+        )
+        self.idle = Idle(self.display)
+        idle_ihibitor_manager = IdleInhibitorManagerV1(self.display)
+        self.add_listener(idle_ihibitor_manager.new_inhibitor_event, self._on_new_inhibitor)
         PrimarySelectionV1DeviceManager(self.display)
         self._virtual_keyboard_manager_v1 = VirtualKeyboardManagerV1(self.display)
         self.add_listener(
@@ -174,8 +188,8 @@ class Core(base.Core, wlrq.HasListeners):
             pointer_constraints_v1.new_constraint_event,
             self._on_new_pointer_constraint,
         )
-        self.pointer_constraints: Set[wlrq.PointerConstraint] = set()
-        self.active_pointer_constraint: Optional[wlrq.PointerConstraint] = None
+        self.pointer_constraints: set[wlrq.PointerConstraint] = set()
+        self.active_pointer_constraint: wlrq.PointerConstraint | None = None
         self._relative_pointer_manager_v1 = RelativePointerManagerV1(self.display)
         self.foreign_toplevel_manager_v1 = ForeignToplevelManagerV1.create(self.display)
 
@@ -305,7 +319,7 @@ class Core(base.Core, wlrq.HasListeners):
         if surface.role == XdgSurfaceRole.TOPLEVEL:
             assert self.qtile is not None
             win = window.Window(self, self.qtile, surface)
-            self.pending_windows.append(win)
+            self.pending_windows.add(win)
 
     def _on_cursor_axis(self, _listener, event: pointer.PointerEventAxis):
         handled = False
@@ -330,6 +344,7 @@ class Core(base.Core, wlrq.HasListeners):
 
     def _on_cursor_button(self, _listener, event: pointer.PointerEventButton):
         assert self.qtile is not None
+        self.idle.notify_activity(self.seat)
         pressed = event.button_state == input_device.ButtonState.PRESSED
         if pressed:
             self._focus_by_click()
@@ -345,6 +360,7 @@ class Core(base.Core, wlrq.HasListeners):
 
     def _on_cursor_motion(self, _listener, event: pointer.PointerEventMotion):
         assert self.qtile is not None
+        self.idle.notify_activity(self.seat)
 
         dx = event.delta_x
         dy = event.delta_y
@@ -371,6 +387,7 @@ class Core(base.Core, wlrq.HasListeners):
 
     def _on_cursor_motion_absolute(self, _listener, event: pointer.PointerEventMotionAbsolute):
         assert self.qtile is not None
+        self.idle.notify_activity(self.seat)
         self.cursor.warp(
             WarpMode.AbsoluteClosest,
             event.x,
@@ -392,6 +409,24 @@ class Core(base.Core, wlrq.HasListeners):
     def _on_new_virtual_keyboard(self, _listener, virtual_keyboard: VirtualKeyboardV1):
         self._add_new_keyboard(virtual_keyboard.input_device)
 
+    def _on_new_inhibitor(self, _listener, idle_inhibitor: IdleInhibitorV1):
+        logger.debug("Signal: idle_inhibitor new_inhibitor")
+
+        if self.qtile is None:
+            return
+
+        for win in self.qtile.windows_map.values():
+            if isinstance(win, window.Window) and not isinstance(win, window.Internal):
+                win.surface.for_each_surface(win.add_idle_inhibitor, idle_inhibitor)
+                if idle_inhibitor.data:
+                    break
+
+    def _on_output_power_manager_set_mode(self, _listener, mode: OutputPowerV1SetModeEvent):
+        logger.debug("Signal: output_power_manager set_mode_event")
+        wlr_output = mode.output
+        wlr_output.enable(enable=True if mode.mode == OutputPowerManagementV1Mode.ON else False)
+        wlr_output.commit()
+
     def _on_new_layer_surface(self, _listener, layer_surface: LayerSurfaceV1):
         logger.debug("Signal: layer_shell new_surface_event")
         assert self.qtile is not None
@@ -411,13 +446,13 @@ class Core(base.Core, wlrq.HasListeners):
         logger.debug("Signal: xwayland ready")
         assert self._xwayland is not None
         self._xwayland.set_seat(self.seat)
-        self.xwayland_atoms: Dict[int, str] = wlrq.get_xwayland_atoms(self._xwayland)
+        self.xwayland_atoms: dict[int, str] = wlrq.get_xwayland_atoms(self._xwayland)
 
     def _on_xwayland_new_surface(self, _listener, surface: xwayland.Surface):
         logger.debug("Signal: xwayland new_surface")
         assert self.qtile is not None
         win = window.XWindow(self, self.qtile, surface)
-        self.pending_windows.append(win)
+        self.pending_windows.add(win)
 
     def _output_manager_reconfigure(self, config: OutputConfigurationV1, apply: bool) -> None:
         """
@@ -754,18 +789,30 @@ class Core(base.Core, wlrq.HasListeners):
         else:
             self.stacked_windows = self.mapped_windows
 
-    def get_screen_info(self) -> List[Tuple[int, int, int, int]]:
+    def check_idle_inhibitor(self) -> None:
+        """
+        Checks if any window that is currently mapped has idle inhibitor
+        and if so inhibits idle
+        """
+        for win in self.mapped_windows:
+            if win.is_idle_inhibited:
+                self.idle.set_enabled(self.seat, False)
+                break
+        else:
+            self.idle.set_enabled(self.seat, True)
+
+    def get_screen_info(self) -> list[tuple[int, int, int, int]]:
         """Get the screen information"""
         return [screen.get_geometry() for screen in self.outputs if screen.wlr_output.enabled]
 
-    def grab_key(self, key: Union[config.Key, config.KeyChord]) -> Tuple[int, int]:
+    def grab_key(self, key: config.Key | config.KeyChord) -> tuple[int, int]:
         """Configure the backend to grab the key event"""
         keysym = xkb.keysym_from_name(key.key, case_insensitive=True)
         mask_key = wlrq.translate_masks(key.modifiers)
         self.grabbed_keys.append((keysym, mask_key))
         return keysym, mask_key
 
-    def ungrab_key(self, key: Union[config.Key, config.KeyChord]) -> Tuple[int, int]:
+    def ungrab_key(self, key: config.Key | config.KeyChord) -> tuple[int, int]:
         """Release the given key event"""
         keysym = xkb.keysym_from_name(key.key, case_insensitive=True)
         mask_key = wlrq.translate_masks(key.modifiers)
@@ -839,7 +886,7 @@ class Core(base.Core, wlrq.HasListeners):
         """Get the keysym for a key from its name"""
         return xkb.keysym_from_name(name, case_insensitive=True)
 
-    def simulate_keypress(self, modifiers: List[str], key: str) -> None:
+    def simulate_keypress(self, modifiers: list[str], key: str) -> None:
         """Simulates a keypress on the focused window."""
         keysym = xkb.keysym_from_name(key, case_insensitive=True)
         mods = wlrq.translate_masks(modifiers)
@@ -854,9 +901,9 @@ class Core(base.Core, wlrq.HasListeners):
 
     def cmd_set_keymap(
         self,
-        layout: Optional[str] = None,
-        options: Optional[str] = None,
-        variant: Optional[str] = None,
+        layout: str | None = None,
+        options: str | None = None,
+        variant: str | None = None,
     ) -> None:
         """
         Set the keymap for the current keyboard.

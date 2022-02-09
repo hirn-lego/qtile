@@ -33,14 +33,18 @@ from __future__ import annotations
 import contextlib
 import os.path
 import sys
-from typing import TYPE_CHECKING, Callable, List, Optional, Union
+from typing import TYPE_CHECKING
 
 from libqtile import configurable, hook, utils
 from libqtile.backend import base
-from libqtile.bar import Bar, BarType
-from libqtile.command.base import CommandObject, ItemT
+from libqtile.bar import Bar
+from libqtile.command.base import CommandObject
 
 if TYPE_CHECKING:
+    from typing import Callable
+
+    from libqtile.bar import BarType
+    from libqtile.command.base import ItemT
     from libqtile.group import _Group
 
 
@@ -61,7 +65,7 @@ class Key:
         description to be added to the key binding
     """
 
-    def __init__(self, modifiers: List[str], key: str, *commands, desc: str = ""):
+    def __init__(self, modifiers: list[str], key: str, *commands, desc: str = ""):
         self.modifiers = modifiers
         self.key = key
         self.commands = commands
@@ -91,9 +95,9 @@ class KeyChord:
 
     def __init__(
         self,
-        modifiers: List[str],
+        modifiers: list[str],
         key: str,
-        submappings: List[Union[Key, KeyChord]],
+        submappings: list[Key | KeyChord],
         mode: str = "",
     ):
         self.modifiers = modifiers
@@ -108,7 +112,7 @@ class KeyChord:
 
 
 class Mouse:
-    def __init__(self, modifiers: List[str], button: str, *commands, **kwargs):
+    def __init__(self, modifiers: list[str], button: str, *commands, **kwargs):
         self.modifiers = modifiers
         self.button = button
         self.commands = commands
@@ -266,16 +270,16 @@ class Screen(CommandObject):
 
     def __init__(
         self,
-        top: Optional[BarType] = None,
-        bottom: Optional[BarType] = None,
-        left: Optional[BarType] = None,
-        right: Optional[BarType] = None,
-        wallpaper: Optional[str] = None,
-        wallpaper_mode: Optional[str] = None,
-        x: Optional[int] = None,
-        y: Optional[int] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
+        top: BarType | None = None,
+        bottom: BarType | None = None,
+        left: BarType | None = None,
+        right: BarType | None = None,
+        wallpaper: str | None = None,
+        wallpaper_mode: str | None = None,
+        x: int | None = None,
+        y: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
     ):
 
         self.top = top
@@ -518,17 +522,17 @@ class Group:
     def __init__(
         self,
         name: str,
-        matches: List[Match] = None,
+        matches: list[Match] = None,
         exclusive=False,
-        spawn: Union[str, List[str]] = None,
+        spawn: str | list[str] | None = None,
         layout: str = None,
-        layouts: List = None,
+        layouts: list = None,
         persist=True,
         init=True,
         layout_opts=None,
         screen_affinity=None,
         position=sys.maxsize,
-        label: Optional[str] = None,
+        label: str | None = None,
     ):
         self.name = name
         self.label = label

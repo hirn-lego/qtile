@@ -24,11 +24,12 @@ import typing
 from collections import defaultdict
 
 from libqtile import configurable
-from libqtile.command.base import CommandObject, ItemT
+from libqtile.command.base import CommandObject
 from libqtile.log_utils import logger
 from libqtile.utils import has_transparency, rgb
 
 if typing.TYPE_CHECKING:
+    from libqtile.command.base import ItemT
     from libqtile.widget.base import _Widget
 
 
@@ -293,10 +294,10 @@ class Bar(Gap, configurable.Configurable):
                 self._configure_widget(i)
         else:
             for idx, i in enumerate(self.widgets):
-                # Create a mirror if this widget is being placed on a different bar
+                # Create a mirror if this widget is already configured but isn't a Mirror
                 # We don't do isinstance(i, Mirror) because importing Mirror (at the top)
                 # would give a circular import as libqtile.widget.base imports lbqtile.bar
-                if i.configured and i.bar != self and i.__class__.__name__ != "Mirror":
+                if i.configured and i.__class__.__name__ != "Mirror":
                     i = i.create_mirror()
                     self.widgets[idx] = i
                 success = self._configure_widget(i)
@@ -440,7 +441,7 @@ class Bar(Gap, configurable.Configurable):
                 i.offsety = offset
                 offset += i.length
 
-    def get_widget_in_position(self, x: int, y: int) -> typing.Optional[_Widget]:
+    def get_widget_in_position(self, x: int, y: int) -> _Widget | None:
         if self.horizontal:
             for i in self.widgets:
                 if x < i.offsetx + i.length:

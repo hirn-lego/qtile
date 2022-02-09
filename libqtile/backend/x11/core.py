@@ -19,12 +19,14 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import os
 import signal
 import time
-from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING
 
 import xcffib
 import xcffib.render
@@ -39,6 +41,8 @@ from libqtile.log_utils import logger
 from libqtile.utils import QtileError
 
 if TYPE_CHECKING:
+    from typing import Callable, Iterator
+
     from libqtile.core.manager import Qtile
 
 _IGNORED_EVENTS = {
@@ -52,11 +56,11 @@ _IGNORED_EVENTS = {
 }
 
 
-def get_keys() -> List[str]:
+def get_keys() -> list[str]:
     return list(xcbq.keysyms.keys())
 
 
-def get_modifiers() -> List[str]:
+def get_modifiers() -> list[str]:
     return list(xcbq.ModMasks.keys())
 
 
@@ -146,7 +150,7 @@ class Core(base.Core):
         # setup the default cursor
         self._root.set_cursor("left_ptr")
 
-        self.qtile = None  # type: Optional[Qtile]
+        self.qtile = None  # type: Qtile | None
         self._painter = None
 
         numlock_code = self.conn.keysym_to_keycode(xcbq.keysyms["Num_Lock"])[0]
@@ -165,7 +169,7 @@ class Core(base.Core):
         self.qtile = None
         self.conn.finalize()
 
-    def get_screen_info(self) -> List[Tuple[int, int, int, int]]:
+    def get_screen_info(self) -> list[tuple[int, int, int, int]]:
         info = [(s.x, s.y, s.width, s.height) for s in self.conn.pseudoscreens]
 
         if not info:
@@ -331,7 +335,7 @@ class Core(base.Core):
                 logger.exception("Got an exception in poll loop")
         self.flush()
 
-    def _get_target_chain(self, event_type: str, event) -> List[Callable]:
+    def _get_target_chain(self, event_type: str, event) -> list[Callable]:
         """Returns a chain of targets that can handle this event
 
         Finds functions named `handle_X`, either on the window object itself or
@@ -408,7 +412,7 @@ class Core(base.Core):
         """The name of the connected display"""
         return self._display_name
 
-    def update_client_list(self, windows_map: Dict[int, base.WindowType]) -> None:
+    def update_client_list(self, windows_map: dict[int, base.WindowType]) -> None:
         """Updates the client stack list
 
         This is needed for third party tasklists and drag and drop of tabs in
@@ -434,7 +438,7 @@ class Core(base.Core):
             viewport += [group.screen.x, group.screen.y] if group.screen else [0, 0]
         self._root.set_property("_NET_DESKTOP_VIEWPORT", viewport)
 
-    def lookup_key(self, key: Union[config.Key, config.KeyChord]) -> Tuple[int, int]:
+    def lookup_key(self, key: config.Key | config.KeyChord) -> tuple[int, int]:
         """Find the keysym and the modifier mask for the given key"""
         try:
             keysym = xcbq.get_keysym(key.key)
@@ -444,7 +448,7 @@ class Core(base.Core):
 
         return keysym, modmask
 
-    def grab_key(self, key: Union[config.Key, config.KeyChord]) -> Tuple[int, int]:
+    def grab_key(self, key: config.Key | config.KeyChord) -> tuple[int, int]:
         """Map the key to receive events on it"""
         keysym, modmask = self.lookup_key(key)
         codes = self.conn.keysym_to_keycode(keysym)
@@ -464,7 +468,7 @@ class Core(base.Core):
                 )
         return keysym, modmask & self._valid_mask
 
-    def ungrab_key(self, key: Union[config.Key, config.KeyChord]) -> Tuple[int, int]:
+    def ungrab_key(self, key: config.Key | config.KeyChord) -> tuple[int, int]:
         """Ungrab the key corresponding to the given keysym and modifier mask"""
         keysym, modmask = self.lookup_key(key)
         codes = self.conn.keysym_to_keycode(keysym)
@@ -544,7 +548,7 @@ class Core(base.Core):
             i._reset_mask()
 
     def create_internal(
-        self, x: int, y: int, width: int, height: int, desired_depth: Optional[int] = 32
+        self, x: int, y: int, width: int, height: int, desired_depth: int | None = 32
     ) -> base.Internal:
         assert self.qtile is not None
 
@@ -833,7 +837,7 @@ class Core(base.Core):
                 break
             time.sleep(0.1)
 
-    def get_mouse_position(self) -> Tuple[int, int]:
+    def get_mouse_position(self) -> tuple[int, int]:
         """
         Get mouse coordinates.
         """

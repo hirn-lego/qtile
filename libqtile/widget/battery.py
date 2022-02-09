@@ -29,6 +29,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+from __future__ import annotations
+
 import os
 import platform
 import re
@@ -37,13 +39,18 @@ from abc import ABC, abstractclassmethod
 from enum import Enum, unique
 from pathlib import Path
 from subprocess import CalledProcessError, check_output
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from libqtile import bar, configurable, images
 from libqtile.images import Img
 from libqtile.log_utils import logger
-from libqtile.utils import ColorsType, send_notification
+from libqtile.utils import send_notification
 from libqtile.widget import base
+
+if TYPE_CHECKING:
+    from typing import Any
+
+    from libqtile.utils import ColorsType
 
 
 @unique
@@ -185,7 +192,7 @@ class _LinuxBattery(_Battery, configurable.Configurable):
         ),
     ]
 
-    filenames = {}  # type: Dict
+    filenames = {}  # type: dict
 
     BAT_DIR = "/sys/class/power_supply"
 
@@ -214,7 +221,7 @@ class _LinuxBattery(_Battery, configurable.Configurable):
                 return bats[0]
         return "BAT0"
 
-    def _load_file(self, name) -> Optional[Tuple[str, str]]:
+    def _load_file(self, name) -> tuple[str, str] | None:
         path = os.path.join(self.BAT_DIR, self.battery, name)
         if "energy" in name or "power" in name:
             value_type = "uW"
@@ -237,7 +244,7 @@ class _LinuxBattery(_Battery, configurable.Configurable):
             # See https://github.com/qtile/qtile/pull/1516 for rationale
             return "-1", "N/A"
 
-    def _get_param(self, name) -> Tuple[str, str]:
+    def _get_param(self, name) -> tuple[str, str]:
         if name in self.filenames and self.filenames[name]:
             result = self._load_file(self.filenames[name])
             if result is not None:
@@ -305,8 +312,8 @@ class _LinuxBattery(_Battery, configurable.Configurable):
 class Battery(base.ThreadPoolText):
     """A text-based battery monitoring widget currently supporting FreeBSD"""
 
-    background: Optional[ColorsType]
-    low_background: Optional[ColorsType]
+    background: ColorsType | None
+    low_background: ColorsType | None
 
     defaults = [
         ("charge_char", "^", "Character to indicate the battery is charging"),
@@ -441,7 +448,7 @@ class BatteryIcon(base._Widget):
         ("battery", 0, "Which battery should be monitored"),
         ("update_interval", 60, "Seconds between status updates"),
         ("theme_path", default_icon_path(), "Path of the icons"),
-    ]  # type: List[Tuple[str, Any, str]]
+    ]  # type: list[tuple[str, Any, str]]
 
     icon_names = (
         "battery-missing",
@@ -470,7 +477,7 @@ class BatteryIcon(base._Widget):
         self.length_type = bar.STATIC
         self.length = 0
         self.image_padding = 0
-        self.surfaces = {}  # type: Dict[str, Img]
+        self.surfaces = {}  # type: dict[str, Img]
         self.current_icon = "battery-missing"
 
         self._battery = self._load_battery(**config)

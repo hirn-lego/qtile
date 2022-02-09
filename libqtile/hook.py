@@ -32,13 +32,12 @@
 
 import asyncio
 import contextlib
-from typing import Dict, Set
 
 from libqtile import utils
 from libqtile.log_utils import logger
 
-subscriptions = {}  # type: Dict
-SKIPLOG = set()  # type: Set
+subscriptions = {}  # type: dict
+SKIPLOG = set()  # type: set
 
 
 def clear():

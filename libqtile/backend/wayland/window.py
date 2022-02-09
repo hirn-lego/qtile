@@ -26,10 +26,12 @@ import typing
 import cairocffi
 import pywayland
 import wlroots.wlr_types.foreign_toplevel_management_v1 as ftm
+from pywayland.server import Listener
 from wlroots import ffi, xwayland
 from wlroots.util.box import Box
 from wlroots.util.edges import Edges
-from wlroots.wlr_types import Texture
+from wlroots.wlr_types import Texture, surface
+from wlroots.wlr_types.idle_inhibit_v1 import IdleInhibitorV1
 from wlroots.wlr_types.layer_shell_v1 import LayerShellV1Layer, LayerSurfaceV1
 from wlroots.wlr_types.xdg_shell import XdgPopup, XdgSurface, XdgTopLevelSetFullscreenEvent
 
@@ -42,8 +44,6 @@ from libqtile.command.base import CommandError
 from libqtile.log_utils import logger
 
 if typing.TYPE_CHECKING:
-    from typing import Dict, List, Optional, Set, Tuple, Union
-
     from wlroots.wlr_types.surface import SubSurface as WlrSubSurface
 
     from libqtile.backend.wayland.core import Core
@@ -77,28 +77,29 @@ class Window(base.Window, HasListeners):
         self.core = core
         self.qtile = qtile
         self.surface = surface
-        self._group: Optional[_Group] = None
-        self.popups: List[XdgPopupWindow] = []
-        self.subsurfaces: List[SubSurface] = []
+        self._group: _Group | None = None
+        self.popups: list[XdgPopupWindow] = []
+        self._idle_inhibitors_count: int = 0
+        self.subsurfaces: list[SubSurface] = []
         self._mapped: bool = False
         self.x = 0
         self.y = 0
-        self.bordercolor: List[ffi.CData] = [_rgb((0, 0, 0, 1))]
+        self.bordercolor: list[ffi.CData] = [_rgb((0, 0, 0, 1))]
         self._opacity: float = 1.0
-        self._outputs: Set[Output] = set()
+        self._outputs: set[Output] = set()
 
         # These become non-zero when being mapping for the first time
         self._width: int = 0
         self._height: int = 0
 
         assert isinstance(surface, XdgSurface)
-        self._app_id: Optional[str] = surface.toplevel.app_id
+        self._app_id: str | None = surface.toplevel.app_id
         self.ftm_handle = core.foreign_toplevel_manager_v1.create_handle()
         surface.data = self.ftm_handle
 
         self._float_state = FloatStates.NOT_FLOATING
-        self.float_x: Optional[int] = None
-        self.float_y: Optional[int] = None
+        self.float_x: int | None = None
+        self.float_y: int | None = None
         self._float_width: int = 0
         self._float_height: int = 0
 
@@ -141,11 +142,11 @@ class Window(base.Window, HasListeners):
         self._height = height
 
     @property
-    def group(self) -> Optional[_Group]:
+    def group(self) -> _Group | None:
         return self._group
 
     @group.setter
-    def group(self, group: Optional[_Group]) -> None:
+    def group(self, group: _Group | None) -> None:
         self._group = group
 
     @property
@@ -163,6 +164,8 @@ class Window(base.Window, HasListeners):
         else:
             self.core.mapped_windows.remove(self)
         self.core.stack_windows()
+        if self._idle_inhibitors_count > 0:
+            self.core.check_idle_inhibitor()
 
     def _on_map(self, _listener, _data):
         logger.debug("Signal: window map")
@@ -186,7 +189,7 @@ class Window(base.Window, HasListeners):
                 self.name = surface.toplevel.title
                 self.ftm_handle.set_title(self.name)
             if self._app_id:
-                self.ftm_handle.set_app_id(self._app_id)
+                self.ftm_handle.set_app_id(self._app_id or "")
 
             # Add the toplevel's listeners
             self.add_listener(
@@ -229,8 +232,9 @@ class Window(base.Window, HasListeners):
             logger.warning("Window destroyed before unmap event.")
             self.mapped = False
 
-        # Don't try to unmanage if we were never managed.
-        if self not in self.core.pending_windows:
+        if self in self.core.pending_windows:
+            self.core.pending_windows.remove(self)
+        else:
             self.qtile.unmanage(self.wid)
 
         self.finalize()
@@ -253,7 +257,7 @@ class Window(base.Window, HasListeners):
     def _on_set_app_id(self, _listener, _data):
         logger.debug("Signal: window set_app_id")
         self._app_id = self.surface.toplevel.app_id
-        self.ftm_handle.set_app_id(self._app_id)
+        self.ftm_handle.set_app_id(self._app_id or "")
 
     def _on_commit(self, _listener, _data):
         self.damage()
@@ -291,12 +295,20 @@ class Window(base.Window, HasListeners):
         logger.debug("Signal: foreign_toplevel_management request_close")
         self.kill()
 
+    def _on_inhibitor_destroy(self, listener: Listener, surface: surface.Surface):
+        # We don't have reference to the inhibitor, but it doesn't really
+        # matter we only need to keep count of how many inhibitors there are
+        self._idle_inhibitors_count -= 1
+        listener.remove()
+        if self._idle_inhibitors_count == 0:
+            self.core.check_idle_inhibitor()
+
     def has_fixed_size(self) -> bool:
         assert isinstance(self.surface, XdgSurface)
         state = self.surface.toplevel._ptr.current
         return 0 < state.min_width == state.max_width and 0 < state.min_height == state.max_height
 
-    def is_transient_for(self) -> Optional[base.WindowType]:
+    def is_transient_for(self) -> base.WindowType | None:
         """What window is this window a transient window for?"""
         assert isinstance(self.surface, XdgSurface)
         parent = self.surface.toplevel.parent
@@ -332,7 +344,7 @@ class Window(base.Window, HasListeners):
         )
         return pid[0]
 
-    def get_wm_class(self) -> Optional[List]:
+    def get_wm_class(self) -> list | None:
         if self._app_id:
             return [self._app_id]
         return None
@@ -372,6 +384,22 @@ class Window(base.Window, HasListeners):
             else:
                 self.bordercolor = [_rgb(color)]
         self.borderwidth = width
+
+    def add_idle_inhibitor(
+        self, surface: surface.Surface, _x: int, _y: int, inhibitor: IdleInhibitorV1 | None
+    ) -> None:
+        if inhibitor is None:
+            return
+        if surface == inhibitor.surface:
+            self._idle_inhibitors_count += 1
+            inhibitor.data = self
+            self.add_listener(inhibitor.destroy_event, self._on_inhibitor_destroy)
+            if self._idle_inhibitors_count == 1:
+                self.core.check_idle_inhibitor()
+
+    @property
+    def is_idle_inhibited(self) -> bool:
+        return self._idle_inhibitors_count > 0
 
     @property
     def floating(self):
@@ -578,7 +606,7 @@ class Window(base.Window, HasListeners):
                 self.group.mark_floating(self, True)
             hook.fire("float_change")
 
-    def info(self) -> Dict:
+    def info(self) -> dict:
         """Return a dictionary of info."""
         float_info = {
             "x": self.float_x,
@@ -670,10 +698,10 @@ class Window(base.Window, HasListeners):
     def cmd_place(self, x, y, width, height, borderwidth, bordercolor, above=False, margin=None):
         self.place(x, y, width, height, borderwidth, bordercolor, above, margin)
 
-    def cmd_get_position(self) -> Tuple[int, int]:
+    def cmd_get_position(self) -> tuple[int, int]:
         return self.x, self.y
 
-    def cmd_get_size(self) -> Tuple[int, int]:
+    def cmd_get_size(self) -> tuple[int, int]:
         return self.width, self.height
 
     def cmd_toggle_floating(self) -> None:
@@ -711,11 +739,11 @@ class Window(base.Window, HasListeners):
 
     def cmd_static(
         self,
-        screen: Optional[int] = None,
-        x: Optional[int] = None,
-        y: Optional[int] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
+        screen: int | None = None,
+        x: int | None = None,
+        y: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
     ) -> None:
         self.defunct = True
         if screen is None:
@@ -759,6 +787,7 @@ class Internal(base.Internal, Window):
     def __init__(self, core: Core, qtile: Qtile, x: int, y: int, width: int, height: int):
         self.core = core
         self.qtile = qtile
+        self._idle_inhibitors_count: int = 0
         self._mapped: bool = False
         self._wid: int = self.core.new_wid()
         self.x: int = x
@@ -766,7 +795,7 @@ class Internal(base.Internal, Window):
         self._opacity: float = 1.0
         self._width: int = width
         self._height: int = height
-        self._outputs: Set[Output] = set()
+        self._outputs: set[Output] = set()
         self._find_outputs()
         self._reset_texture()
         self._group = None
@@ -856,7 +885,7 @@ class Internal(base.Internal, Window):
         self._find_outputs()
         self.damage()
 
-    def info(self) -> Dict:
+    def info(self) -> dict:
         """Return a dictionary of info."""
         return dict(
             x=self.x,
@@ -879,13 +908,15 @@ class Static(base.Static, Window):
         qtile: Qtile,
         surface: SurfaceType,
         wid: int,
+        idle_inhibitor_count: int = 0,
     ):
         base.Static.__init__(self)
         self.core = core
         self.qtile = qtile
         self.surface = surface
         self.screen = qtile.current_screen
-        self.subsurfaces: List[SubSurface] = []
+        self._idle_inhibitors_count = idle_inhibitor_count
+        self.subsurfaces: list[SubSurface] = []
         self._wid = wid
         self._mapped: bool = False
         self.x = 0
@@ -893,12 +924,12 @@ class Static(base.Static, Window):
         self._width = 0
         self._height = 0
         self.borderwidth: int = 0
-        self.bordercolor: List[ffi.CData] = [_rgb((0, 0, 0, 1))]
+        self.bordercolor: list[ffi.CData] = [_rgb((0, 0, 0, 1))]
         self.opacity: float = 1.0
-        self._outputs: Set[Output] = set()
+        self._outputs: set[Output] = set()
         self._float_state = FloatStates.FLOATING
         self.is_layer = False
-        self._app_id: Optional[str] = None
+        self._app_id: str | None = None
 
         self.add_listener(surface.map_event, self._on_map)
         self.add_listener(surface.unmap_event, self._on_unmap)
@@ -1020,10 +1051,12 @@ class Static(base.Static, Window):
         hook.fire("client_focus", self)
 
     def kill(self) -> None:
-        if self.is_layer:
-            self.surface.destroy()  # type: ignore
+        if isinstance(self.surface, LayerSurfaceV1):
+            self.surface.destroy()
+        elif isinstance(self.surface, XdgSurface):
+            self.surface.send_close()
         else:
-            self.surface.send_close()  # type: ignore
+            self.surface.close()  # xwayland.Surface
 
     def place(
         self,
@@ -1049,6 +1082,7 @@ class Static(base.Static, Window):
             else:
                 self.surface.configure(x, y, self._width, self._height)
             self.paint_borders(bordercolor, borderwidth)
+            self._find_outputs()
         self.damage()
 
     def cmd_bring_to_front(self) -> None:
@@ -1062,16 +1096,16 @@ class Static(base.Static, Window):
 class XdgPopupWindow(HasListeners):
     """
     This represents a single `struct wlr_xdg_popup` object and is owned by a single
-    parent window (of `Union[WindowType, XdgPopupWindow]`). wlroots does most of the
+    parent window (of `WindowType | XdgPopupWindow`). wlroots does most of the
     work for us, but we need to listen to certain events so that we know when to render
     frames and we need to unconstrain the popups so they are completely visible.
     """
 
-    def __init__(self, parent: Union[WindowType, XdgPopupWindow], xdg_popup: XdgPopup):
+    def __init__(self, parent: WindowType | XdgPopupWindow, xdg_popup: XdgPopup):
         self.parent = parent
         self.xdg_popup = xdg_popup
         self.core: Core = parent.core
-        self.popups: List[XdgPopupWindow] = []
+        self.popups: list[XdgPopupWindow] = []
 
         # Keep on output
         if isinstance(parent, XdgPopupWindow):
@@ -1120,13 +1154,13 @@ class XdgPopupWindow(HasListeners):
 class SubSurface(HasListeners):
     """
     This represents a single `struct wlr_subsurface` object and is owned by a single
-    parent window (of `Union[WindowType, SubSurface]`). We only need to track them so
+    parent window (of `WindowType | SubSurface`). We only need to track them so
     that we can listen to their commit events and render accordingly.
     """
 
-    def __init__(self, parent: Union[WindowType, SubSurface], subsurface: WlrSubSurface):
+    def __init__(self, parent: WindowType | SubSurface, subsurface: WlrSubSurface):
         self.parent = parent
-        self.subsurfaces: List[SubSurface] = []
+        self.subsurfaces: list[SubSurface] = []
 
         self.add_listener(subsurface.destroy_event, self._on_destroy)
         self.add_listener(subsurface.surface.commit_event, parent._on_commit)
@@ -1159,23 +1193,25 @@ class XWindow(Window):
         self.core = core
         self.qtile = qtile
         self.surface = surface
-        self._group: Optional[_Group] = None
+        self._group: _Group | None = None
         self._mapped: bool = False
+        self._unmapping: bool = False  # Whether the client or Qtile unmapped this
         self.x = 0
         self.y = 0
-        self.bordercolor: List[ffi.CData] = [_rgb((0, 0, 0, 1))]
+        self.bordercolor: list[ffi.CData] = [_rgb((0, 0, 0, 1))]
         self._opacity: float = 1.0
-        self._outputs: Set[Output] = set()
+        self._outputs: set[Output] = set()
+        self._idle_inhibitors_count: int = 0
 
-        self._app_id: Optional[str] = self.surface.wm_class
+        self._app_id: str | None = self.surface.wm_class
         self.ftm_handle = core.foreign_toplevel_manager_v1.create_handle()
         surface.data = self.ftm_handle
 
         # These become non-zero when being mapping for the first time
         self._width: int = 0
         self._height: int = 0
-        self.float_x: Optional[int] = None
-        self.float_y: Optional[int] = None
+        self.float_x: int | None = None
+        self.float_y: int | None = None
         self._float_width: int = 0
         self._float_height: int = 0
         self._float_state = FloatStates.NOT_FLOATING
@@ -1201,6 +1237,7 @@ class XWindow(Window):
                 self.cmd_static(
                     None, self.surface.x, self.surface.y, self.surface.width, self.surface.height
                 )
+                self.core.focus_window(self.qtile.windows_map[self._wid])
                 return
 
             # Save the client's desired geometry
@@ -1213,12 +1250,11 @@ class XWindow(Window):
                 self.name = title
                 self.ftm_handle.set_title(self.name)
             self._app_id = self.surface.wm_class
-            self.ftm_handle.set_app_id(self._app_id)
+            self.ftm_handle.set_app_id(self._app_id or "")
 
             # Add event listeners
             self.add_listener(self.surface.surface.commit_event, self._on_commit)
             self.add_listener(self.surface.request_fullscreen_event, self._on_request_fullscreen)
-            self.add_listener(self.surface.request_configure_event, self._on_request_configure)
             self.add_listener(self.surface.set_title_event, self._on_set_title)
             self.add_listener(self.surface.set_class_event, self._on_set_class)
             self.add_listener(
@@ -1241,15 +1277,38 @@ class XWindow(Window):
             self.mapped = True
             self.core.focus_window(self)
 
+    def _on_unmap(self, _listener, _data):
+        logger.debug("Signal: xwindow unmap")
+        self.mapped = False
+        self.damage()
+        seat = self.core.seat
+        if not seat.destroyed:
+            if self.surface.surface == seat.keyboard_state.focused_surface:
+                seat.keyboard_clear_focus()
+
+        if not self._unmapping:
+            self.qtile.unmanage(self.wid)
+            self.finalize()
+
+        self._unmapping = False
+
+    def _on_destroy(self, _listener, _data):
+        logger.debug("Signal: window destroy")
+        if self.mapped:
+            logger.warning("Window destroyed before unmap event.")
+            self.mapped = False
+
+        if self in self.core.pending_windows:
+            self.core.pending_windows.remove(self)
+        else:
+            self.qtile.unmanage(self.wid)
+
+        self.finalize()
+
     def _on_request_fullscreen(self, _listener, _data):
         logger.debug("Signal: xwindow request_fullscreen")
         if self.qtile.config.auto_fullscreen:
             self.fullscreen = not self.fullscreen
-
-    def _on_request_configure(self, _listener, event: xwayland.SurfaceConfigureEvent):
-        logger.debug("Signal: xwindow request_configure")
-        self.surface.configure(event.x, event.y, event.width, event.height)  # type: ignore
-        self.floating = True
 
     def _on_set_title(self, _listener, _data):
         logger.debug("Signal: xwindow set_title")
@@ -1262,7 +1321,12 @@ class XWindow(Window):
     def _on_set_class(self, _listener, _data):
         logger.debug("Signal: xwindow set_class")
         self._app_id = self.surface.wm_class
-        self.ftm_handle.set_app_id(self._app_id)
+        self.ftm_handle.set_app_id(self._app_id or "")
+
+    def hide(self) -> None:
+        if self.mapped:
+            self._unmapping = True
+            self.surface.unmap_event.emit()
 
     def kill(self) -> None:
         self.surface.close()  # type: ignore
@@ -1277,7 +1341,7 @@ class XWindow(Window):
             and 0 < hints.min_height == hints.max_height
         )
 
-    def is_transient_for(self) -> Optional[base.WindowType]:
+    def is_transient_for(self) -> base.WindowType | None:
         """What window is this window a transient window for?"""
         parent = self.surface.parent  # type: ignore
         if parent:
@@ -1289,13 +1353,13 @@ class XWindow(Window):
     def get_pid(self) -> int:
         return self.surface.pid  # type: ignore
 
-    def get_wm_type(self) -> Optional[str]:
+    def get_wm_type(self) -> str | None:
         wm_type = self.surface.window_type  # type: ignore
         if wm_type:
             return self.core.xwayland_atoms[wm_type[0]]
         return None
 
-    def get_wm_role(self) -> Optional[str]:
+    def get_wm_role(self) -> str | None:
         return self.surface.role  # type: ignore
 
     def place(
@@ -1353,11 +1417,11 @@ class XWindow(Window):
 
     def cmd_static(
         self,
-        screen: Optional[int] = None,
-        x: Optional[int] = None,
-        y: Optional[int] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
+        screen: int | None = None,
+        x: int | None = None,
+        y: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
     ) -> None:
         self.defunct = True
         if self.group:
@@ -1372,7 +1436,13 @@ class XWindow(Window):
             height = self.height
 
         self.finalize_listeners()
-        win = Static(self.core, self.qtile, self.surface, self.wid)
+        win = Static(
+            self.core,
+            self.qtile,
+            self.surface,
+            self.wid,
+            idle_inhibitor_count=self._idle_inhibitors_count,
+        )
         if screen is not None:
             win.screen = self.qtile.screens[screen]
         win.place(x, y, width, height, 0, None)

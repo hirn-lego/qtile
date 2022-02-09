@@ -26,7 +26,8 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-from typing import TYPE_CHECKING
+
+from __future__ import annotations
 
 import xcffib
 from xcffib.xproto import ClientMessageData, ClientMessageEvent, EventMask, SetMode
@@ -35,9 +36,6 @@ from libqtile import bar
 from libqtile.backend.x11 import window
 from libqtile.confreader import ConfigError
 from libqtile.widget import base
-
-if TYPE_CHECKING:
-    from typing import List, Optional
 
 XEMBED_PROTOCOL_VERSION = 0
 
@@ -52,6 +50,7 @@ class Icon(window._Window):
         # we need something in self.name in order to sort icons so we use the window's WID.
         self.name = win.get_name() or str(win.wid)
         self.update_size()
+        self._wm_class: list[str] | None = None
 
     def __eq__(self, other):
         if not isinstance(other, Icon):
@@ -130,7 +129,7 @@ class Systray(window._Window, base._Widget):
         self.tray_icons = []
         self.screen = 0
         self._name = config.get("name", "systray")
-        self._wm_class: Optional[List[str]] = None
+        self._wm_class: list[str] | None = None
 
     def calculate_length(self):
         if self.bar.horizontal:
