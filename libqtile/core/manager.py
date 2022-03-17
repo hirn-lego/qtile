@@ -88,6 +88,7 @@ class Qtile(CommandObject):
 
         self.windows_map: dict[int, base.WindowType] = {}
         self.widgets_map: dict[str, _Widget] = {}
+        self.renamed_widgets: list[str]
         self.groups_map: dict[str, _Group] = {}
         self.groups: list[_Group] = []
 
@@ -526,20 +527,34 @@ class Qtile(CommandObject):
             self.update_desktops()
 
     def register_widget(self, w: _Widget) -> None:
-        """Register a bar widget
-
-        If a widget with the same name already exists, this will silently
-        ignore that widget. However, this is not necessarily a bug. By default
-        a widget's name is just ``self.__class__.lower()``, so putting multiple
-        widgets of the same class will alias and one will be inaccessible.
-        Since more than one groupbox widget is useful when you have more than
-        one screen, this is a not uncommon occurrence. If you want to use the
-        debug info for widgets with the same name, set the name yourself.
         """
-        if w.name:
-            if w.name in self.widgets_map:
-                return
-            self.widgets_map[w.name] = w
+        Register a bar widget
+
+        If a widget with the same name already exists, the new widget will be
+        automatically renamed by appending numeric suffixes. For example, if
+        the widget is named "foo", we will attempt "foo_1", "foo_2", and so on,
+        until a free name is found.
+
+        This naming convention is only used for qtile.widgets_map as every widget
+        MUST be registered here to ensure that objects are finalised correctly.
+
+        Widgets can still be accessed by their name when using
+        lazy.screen.widget[name] or lazy.bar["top"].widget[name] unless there are
+        duplicate widgets in the bar/screen.
+
+        A warning will be provided where renaming has occurred.
+        """
+        # Find unoccupied name by appending numeric suffixes
+        name = w.name
+        i = 0
+        while name in self.widgets_map:
+            i += 1
+            name = f"{w.name}_{i}"
+
+        if name != w.name:
+            self.renamed_widgets.append(name)
+
+        self.widgets_map[name] = w
 
     @property
     def current_layout(self) -> Layout:
@@ -600,7 +615,7 @@ class Qtile(CommandObject):
         if win.defunct:
             return
         self.windows_map[win.wid] = win
-        if self.current_screen and not isinstance(win, base.Static):
+        if self.current_screen and isinstance(win, base.Window):
             # Window may have been bound to a group in the hook.
             if not win.group and self.current_screen.group:
                 self.current_screen.group.add(win, focus=win.can_steal_focus)
@@ -630,7 +645,7 @@ class Qtile(CommandObject):
             return result[0]
         return None
 
-    def find_closest_screen(self, x: int, y: int) -> Screen | None:
+    def find_closest_screen(self, x: int, y: int) -> Screen:
         """
         If find_screen returns None, then this basically extends a
         screen vertically and horizontally and see if x,y lies in the
@@ -658,9 +673,7 @@ class Qtile(CommandObject):
             return y_match[0]
         return self._find_closest_closest(x, y, x_match + y_match)
 
-    def _find_closest_closest(
-        self, x: int, y: int, candidate_screens: list[Screen]
-    ) -> Screen | None:
+    def _find_closest_closest(self, x: int, y: int, candidate_screens: list[Screen]) -> Screen:
         """
         if find_closest_screen can't determine one, we've got multiple
         screens, so figure out who is closer.  We'll calculate using
@@ -669,7 +682,7 @@ class Qtile(CommandObject):
         Note that this could return None if x, y is right/below all
         screens.
         """
-        closest_distance: float | None = None  # because mypy only considers first value
+        closest_distance: float | None = None
         if not candidate_screens:
             # try all screens
             candidate_screens = self.screens
@@ -686,7 +699,7 @@ class Qtile(CommandObject):
             if closest_distance is None or distance < closest_distance:
                 closest_distance = distance
                 closest_screen = s
-        return closest_screen
+        return closest_screen or self.screens[0]
 
     def process_button_click(self, button_code: int, modmask: int, x: int, y: int) -> bool:
         handled = False
@@ -1270,7 +1283,7 @@ class Qtile(CommandObject):
 
     def find_window(self, wid: int) -> None:
         window = self.windows_map.get(wid)
-        if window and isinstance(window, base.Window) and window.group:
+        if isinstance(window, base.Window) and window.group:
             if not window.group.screen:
                 self.current_screen.set_group(window.group)
             window.group.focus(window, False)

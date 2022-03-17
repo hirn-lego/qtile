@@ -64,7 +64,7 @@ class Gap(CommandObject):
         self.height = None
         self.horizontal = None
 
-    def _configure(self, qtile, screen):
+    def _configure(self, qtile, screen, **kwargs):
         self.qtile = qtile
         self.screen = screen
         self.size = self.initial_size
@@ -194,9 +194,14 @@ class Bar(Gap, configurable.Configurable):
         self.future = None
         self._borders_drawn = False
 
-    def _configure(self, qtile, screen):
-        # We only want to adjust margin sizes once unless there's a new strut
-        if not self._configured or self._add_strut:
+    def _configure(self, qtile, screen, reconfigure=False):
+        """
+        Configure the bar. `reconfigure` is set to True when screen dimensions
+        change, forcing a recalculation of the bar's dimensions.
+        """
+        # We only want to adjust margin sizes once unless there's a new strut or we're
+        # reconfiguring the bar because the screen has changed
+        if not self._configured or self._add_strut or reconfigure:
             Gap._configure(self, qtile, screen)
             self._borders_drawn = False
 
@@ -289,6 +294,7 @@ class Bar(Gap, configurable.Configurable):
         self.drawer.clear(self.background)
 
         self.crashed_widgets = []
+        self.qtile.renamed_widgets = []
         if self._configured:
             for i in self.widgets:
                 self._configure_widget(i)
@@ -303,6 +309,15 @@ class Bar(Gap, configurable.Configurable):
                 success = self._configure_widget(i)
                 if success:
                     qtile.register_widget(i)
+
+        # Alert the user that we've renamed some widgets
+        if self.qtile.renamed_widgets:
+            logger.info(
+                "The following widgets were renamed in qtile.widgets_map: %s "
+                "To bind commands, rename the widget or use lazy.widget[new_name].",
+                ", ".join(self.qtile.renamed_widgets),
+            )
+            self.qtile.renamed_widgets.clear()
 
         self._remove_crashed_widgets()
         self.draw()

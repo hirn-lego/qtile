@@ -999,15 +999,19 @@ class _Window:
         if warp and self.qtile.config.cursor_warp:
             self.window.warp_pointer(self.width // 2, self.height // 2)
 
+        # update net wm state
+        state = list(self.window.get_property("_NET_WM_STATE", "ATOM", unpack=int))
+        state_focused = self.qtile.core.conn.atoms["_NET_WM_STATE_FOCUSED"]
+        state.append(state_focused)
+
         if self.urgent:
             self.urgent = False
-
             atom = self.qtile.core.conn.atoms["_NET_WM_STATE_DEMANDS_ATTENTION"]
-            state = list(self.window.get_property("_NET_WM_STATE", "ATOM", unpack=int))
 
             if atom in state:
                 state.remove(atom)
-                self.window.set_property("_NET_WM_STATE", state)
+
+        self.window.set_property("_NET_WM_STATE", state)
 
         # re-grab button events on the previously focussed window
         old = self.qtile.core._root.get_property("_NET_ACTIVE_WINDOW", "WINDOW", unpack=int)
@@ -1015,6 +1019,10 @@ class _Window:
             old_win = self.qtile.windows_map[old[0]]
             if not isinstance(old_win, base.Internal):
                 old_win._grab_click()
+                state = list(old_win.window.get_property("_NET_WM_STATE", "ATOM", unpack=int))
+                if state_focused in state:
+                    state.remove(state_focused)
+                    old_win.window.set_property("_NET_WM_STATE", state)
         self.qtile.core._root.set_property("_NET_ACTIVE_WINDOW", self.window.wid)
         self._ungrab_click()
 
@@ -1248,6 +1256,9 @@ class Static(_Window, base.Static):
         if name == "_NET_WM_STRUT_PARTIAL":
             self.update_strut()
 
+    def cmd_bring_to_front(self):
+        self.window.configure(stackmode=StackMode.Above)
+
 
 class Window(_Window, base.Window):
     _window_mask = (
@@ -1305,6 +1316,7 @@ class Window(_Window, base.Window):
                 # if we are setting floating early, e.g. from a hook, we don't have a screen yet
                 self._float_state = FloatStates.FLOATING
         elif (not do_float) and self._float_state != FloatStates.NOT_FLOATING:
+            self.update_fullscreen_wm_state(False)
             if self._float_state == FloatStates.FLOATING:
                 # store last size
                 self._float_width = self.width
@@ -1324,19 +1336,30 @@ class Window(_Window, base.Window):
     def toggle_floating(self):
         self.floating = not self.floating
 
+    def set_wm_state(self, old_state, new_state):
+        if new_state != old_state:
+            self.window.set_property("_NET_WM_STATE", list(new_state))
+
+    def update_fullscreen_wm_state(self, do_full):
+        # already done updating previously
+        if do_full == self.fullscreen:
+            return
+
+        # update fullscreen _NET_WM_STATE
+        atom = set([self.qtile.core.conn.atoms["_NET_WM_STATE_FULLSCREEN"]])
+        prev_state = set(self.window.get_property("_NET_WM_STATE", "ATOM", unpack=int))
+
+        if do_full:
+            self.set_wm_state(prev_state, prev_state | atom)
+        else:
+            self.set_wm_state(prev_state, prev_state - atom)
+
     @property
     def fullscreen(self):
         return self._float_state == FloatStates.FULLSCREEN
 
     @fullscreen.setter
     def fullscreen(self, do_full):
-        atom = set([self.qtile.core.conn.atoms["_NET_WM_STATE_FULLSCREEN"]])
-        prev_state = set(self.window.get_property("_NET_WM_STATE", "ATOM", unpack=int))
-
-        def set_state(old_state, new_state):
-            if new_state != old_state:
-                self.window.set_property("_NET_WM_STATE", list(new_state))
-
         if do_full:
             screen = self.group.screen or self.qtile.find_closest_screen(self.x, self.y)
 
@@ -1348,13 +1371,9 @@ class Window(_Window, base.Window):
                 screen.height - 2 * bw,
                 new_float_state=FloatStates.FULLSCREEN,
             )
-            set_state(prev_state, prev_state | atom)
             return
 
         if self._float_state == FloatStates.FULLSCREEN:
-            # The order of calling set_state() and then
-            # setting self.floating = False is important
-            set_state(prev_state, prev_state - atom)
             self.floating = False
             return
 
@@ -1467,6 +1486,7 @@ class Window(_Window, base.Window):
         return (self.x, self.y)
 
     def _reconfigure_floating(self, new_float_state=FloatStates.FLOATING):
+        self.update_fullscreen_wm_state(new_float_state == FloatStates.FULLSCREEN)
         if new_float_state == FloatStates.MINIMIZED:
             self.state = IconicState
             self.hide()

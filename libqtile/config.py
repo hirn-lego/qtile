@@ -25,9 +25,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 #
-#
-# required for lazy type annotations
-# can be removed when python 3.7...3.9 support is dropped (see PEP 563)
 from __future__ import annotations
 
 import contextlib
@@ -305,10 +302,7 @@ class Screen(CommandObject):
         self.height = height
         self.set_group(group)
         for i in self.gaps:
-            if reconfigure_gaps:
-                i._configured = False
-                i._borders_drawn = False
-            i._configure(qtile, self)
+            i._configure(qtile, self, reconfigure=reconfigure_gaps)
         if self.wallpaper:
             self.wallpaper = os.path.expanduser(self.wallpaper)
             self.paint(self.wallpaper, self.wallpaper_mode)
@@ -481,6 +475,10 @@ class Screen(CommandObject):
         group = self.qtile.groups_map.get(group_name)
         self.toggle_group(group, warp=warp)
 
+    def cmd_set_wallpaper(self, path, mode=None):
+        """Set the wallpaper to the given file."""
+        self.paint(path, mode)
+
 
 class Group:
     """Represents a "dynamic" group
@@ -522,11 +520,11 @@ class Group:
     def __init__(
         self,
         name: str,
-        matches: list[Match] = None,
+        matches: list[Match] | None = None,
         exclusive=False,
         spawn: str | list[str] | None = None,
-        layout: str = None,
-        layouts: list = None,
+        layout: str | None = None,
+        layouts: list | None = None,
         persist=True,
         init=True,
         layout_opts=None,
@@ -647,7 +645,7 @@ class Match:
         wm_type=None,
         wm_instance_class=None,
         net_wm_pid=None,
-        func: Callable[[base.WindowType], bool] = None,
+        func: Callable[[base.WindowType], bool] | None = None,
         wid=None,
     ):
         self._rules = {}
